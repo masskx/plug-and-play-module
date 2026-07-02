@@ -1,0 +1,6 @@
+样例/
+__pycache__/
+*.py[cod]
+regression-report.json
+*.tmp
+*.log
