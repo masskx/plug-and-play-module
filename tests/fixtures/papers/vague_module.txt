@@ -1,0 +1,16 @@
+# Extracted PDF Text
+
+source: fixture
+backend: fixture
+pages: 1
+
+## Page 1
+Harmony Fusion for Multimodal Learning
+Hal Vague, Ivy Unclear
+Example University
+Abstract
+We propose the Harmony Fusion module for multimodal learning. The module fuses information from different modalities and improves
+accuracy on several benchmark tasks. Ablation experiments confirm that the module is helpful.
+1 Method
+Our fusion block combines features from the two branches and leads to better representations. Details are given in the
+supplementary material.

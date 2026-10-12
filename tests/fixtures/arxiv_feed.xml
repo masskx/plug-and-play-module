@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.00001v2</id>
+    <published>2024-01-02T00:00:00Z</published>
+    <title>Ripple Attention: A Lightweight
+      Plug-and-Play Channel Attention Block</title>
+    <summary>We propose Ripple Attention. Code is available at https://github.com/example-lab/ripple-attention.</summary>
+    <author><name>Jane Doe</name></author>
+    <author><name>John Roe</name></author>
+    <arxiv:comment>Accepted to an example conference</arxiv:comment>
+    <link href="http://arxiv.org/abs/2401.00001v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2401.00001v2" rel="related" type="application/pdf"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2402.00002v1</id>
+    <published>2024-02-03T00:00:00Z</published>
+    <title>Ripple Attention for Video Understanding</title>
+    <summary>A different paper that builds on a related idea.</summary>
+    <author><name>Other Author</name></author>
+    <link title="pdf" href="http://arxiv.org/pdf/2402.00002v1" rel="related" type="application/pdf"/>
+  </entry>
+</feed>

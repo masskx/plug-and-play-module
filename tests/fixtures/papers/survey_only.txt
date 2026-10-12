@@ -1,0 +1,16 @@
+# Extracted PDF Text
+
+source: fixture
+backend: fixture
+pages: 1
+
+## Page 1
+A Comprehensive Survey of Attention Mechanisms in Vision
+Carol Writer
+Department of Informatics, Example University
+Abstract
+This survey reviews attention modules and blocks proposed for computer vision over the last decade. We provide a taxonomy of
+channel attention, spatial attention and self-attention layers, and discuss open challenges. This paper reviews more than two
+hundred articles and summarizes benchmark results from the literature.
+1 Introduction
+Attention has become a central module in vision models. We organize prior blocks into a taxonomy.

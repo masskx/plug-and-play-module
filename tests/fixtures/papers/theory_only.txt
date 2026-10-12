@@ -1,0 +1,14 @@
+# Extracted PDF Text
+
+source: fixture
+backend: fixture
+pages: 1
+
+## Page 1
+Regret Bounds for Online Convex Optimization with Delayed Feedback
+Dan Prover, Erin Proof
+Department of Mathematics, Example University
+Abstract
+We prove a new regret bound for online convex optimization when feedback arrives with delay. We establish a lower bound that
+matches the upper bound up to logarithmic factors and derive a convergence rate for the adaptive step size. No experiments with
+neural network layers or blocks are included; the analysis applies to general convex losses.
