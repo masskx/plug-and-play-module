@@ -1,0 +1,82 @@
+{
+  "_comment": "Real-world benchmark. 'expected_paper' values are the maintainer's judgement of the paper (not ground truth) - edit freely. 'code' entries were verified against the live repositories; targets list the module a human would pick.",
+  "entries": [
+    {
+      "id": "se_cvpr18", "title": "Squeeze-and-Excitation Networks", "arxiv_id": "1709.01507",
+      "expected_paper": ["yes"],
+      "code": {"repo": "moskomule/senet.pytorch", "branch": "master", "files": ["senet/se_module.py", "senet/baseline.py"]},
+      "targets": [{"file": "senet/se_module.py", "symbol": "SELayer", "init": "channel=64", "smoke_input": "2,64,16,16", "equiv": true}]
+    },
+    {
+      "id": "cbam_eccv18", "title": "CBAM: Convolutional Block Attention Module", "arxiv_id": "1807.06521",
+      "expected_paper": ["yes"],
+      "code": {"repo": "Jongchan/attention-module", "branch": "master", "files": ["MODELS/cbam.py"]},
+      "targets": [{"file": "MODELS/cbam.py", "symbol": "CBAM", "init": "gate_channels=64", "smoke_input": "2,64,16,16", "equiv": true}]
+    },
+    {
+      "id": "eca_cvpr20", "title": "ECA-Net: Efficient Channel Attention for Deep Convolutional Neural Networks", "arxiv_id": "1910.03151",
+      "expected_paper": ["yes"],
+      "code": {"repo": "BangguWu/ECANet", "branch": "master", "files": ["models/eca_module.py", "models/eca_resnet.py"]},
+      "targets": [
+        {"file": "models/eca_module.py", "symbol": "eca_layer", "init": "channel=64", "smoke_input": "2,64,16,16", "equiv": true},
+        {"file": "models/eca_resnet.py", "symbol": "ECABasicBlock", "init": "inplanes=64,planes=64", "smoke_input": "2,64,16,16"}
+      ]
+    },
+    {
+      "id": "coordatt_cvpr21", "title": "Coordinate Attention for Efficient Mobile Network Design", "arxiv_id": "2103.02907",
+      "expected_paper": ["yes"],
+      "code": {"repo": "Andrew-Qibin/CoordAttention", "branch": "main", "files": ["coordatt.py"]},
+      "targets": [{"file": "coordatt.py", "symbol": "CoordAtt", "init": "inp=64,oup=64", "smoke_input": "2,64,16,16", "equiv": true}]
+    },
+    {
+      "id": "repvgg_cvpr21", "title": "RepVGG: Making VGG-style ConvNets Great Again", "arxiv_id": "2101.03697",
+      "expected_paper": ["yes", "uncertain"],
+      "code": {"repo": "DingXiaoH/RepVGG", "branch": "main", "files": ["repvgg.py", "se_block.py"]},
+      "targets": [{"file": "repvgg.py", "symbol": "RepVGGBlock", "init": "in_channels=32,out_channels=32,kernel_size=3,padding=1", "smoke_input": "2,32,16,16", "equiv": true}]
+    },
+    {
+      "id": "swin_iccv21", "title": "Swin Transformer: Hierarchical Vision Transformer using Shifted Windows", "arxiv_id": "2103.14030",
+      "expected_paper": ["yes", "uncertain"],
+      "code": {"repo": "microsoft/Swin-Transformer", "branch": "main", "files": ["models/swin_transformer.py"]},
+      "targets": [{"file": "models/swin_transformer.py", "symbol": "WindowAttention", "init": "dim=96,window_size=(7,7),num_heads=3", "smoke_input": "4,49,96", "equiv": true}]
+    },
+    {
+      "id": "convnext_cvpr22", "title": "A ConvNet for the 2020s", "arxiv_id": "2201.03545",
+      "expected_paper": ["uncertain", "no", "yes"],
+      "code": {"repo": "facebookresearch/ConvNeXt", "branch": "main", "files": ["models/convnext.py"]},
+      "targets": [{"file": "models/convnext.py", "symbol": "Block", "init": "dim=64", "smoke_input": "2,64,16,16", "equiv": true}]
+    },
+    {
+      "id": "dino_iccv21", "title": "Emerging Properties in Self-Supervised Vision Transformers", "arxiv_id": "2104.14294",
+      "expected_paper": ["no", "uncertain"],
+      "code": {"repo": "facebookresearch/dino", "branch": "main", "files": ["vision_transformer.py", "utils.py", "main_dino.py"]},
+      "targets": [{"file": "vision_transformer.py", "symbol": "Attention", "init": "dim=96,num_heads=3", "smoke_input": "2,50,96", "equiv": true}]
+    },
+    {
+      "id": "mamba_2023", "title": "Mamba: Linear-Time Sequence Modeling with Selective State Spaces", "arxiv_id": "2312.00752",
+      "expected_paper": ["yes", "uncertain"],
+      "code": {"repo": "state-spaces/mamba", "branch": "main", "files": ["mamba_ssm/modules/mamba_simple.py", "mamba_ssm/ops/selective_scan_interface.py"]},
+      "targets": [{"file": "mamba_ssm/modules/mamba_simple.py", "symbol": "Mamba", "init": "d_model=64", "smoke_input": "2,32,64", "expect_smoke": ["missing_dependency", "passed", "runtime_error"]}],
+      "notes": "Needs compiled CUDA ops: an honest result is 'uncertain' / missing_dependency, never a fabricated pass."
+    },
+    {
+      "id": "mmdet_fpn", "title": "Feature Pyramid Networks for Object Detection", "arxiv_id": "1612.03144",
+      "expected_paper": ["yes", "uncertain"],
+      "code": {"repo": "open-mmlab/mmdetection", "branch": "main", "files": ["mmdet/models/necks/fpn.py"]},
+      "targets": [{"file": "mmdet/models/necks/fpn.py", "symbol": "FPN", "init": "in_channels=[32,64],out_channels=32,num_outs=2", "smoke_input": "2,32,16,16;2,64,8,8", "expect_smoke": ["missing_dependency"]}],
+      "notes": "Framework-registered module (mmcv/mmengine): must surface as uncertain, not 'no'."
+    },
+    {
+      "id": "mnist_control", "title": "PyTorch MNIST example (negative control)", "arxiv_id": null,
+      "expected_paper": null,
+      "code": {"repo": "pytorch/examples", "branch": "main", "files": ["mnist/main.py"]},
+      "expected_code": "none", "targets": []
+    },
+    {"id": "coco_dataset", "title": "Microsoft COCO: Common Objects in Context", "arxiv_id": "1405.0312", "expected_paper": ["no"]},
+    {"id": "kinetics_dataset", "title": "The Kinetics Human Action Video Dataset", "arxiv_id": "1705.06950", "expected_paper": ["no"]},
+    {"id": "llm_survey", "title": "A Survey of Large Language Models", "arxiv_id": "2303.18223", "expected_paper": ["no"]},
+    {"id": "vit_survey", "title": "Transformers in Vision: A Survey", "arxiv_id": "2101.01169", "expected_paper": ["no"]},
+    {"id": "tensorflow_system", "title": "TensorFlow: Large-Scale Machine Learning on Heterogeneous Distributed Systems", "arxiv_id": "1603.04467", "expected_paper": ["no"]},
+    {"id": "rethinking_generalization", "title": "Understanding deep learning requires rethinking generalization", "arxiv_id": "1611.03530", "expected_paper": ["no"]}
+  ]
+}

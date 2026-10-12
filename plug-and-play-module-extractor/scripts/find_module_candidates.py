@@ -149,6 +149,12 @@ class Candidate:
     n_submodules: int = 0
     risks: list[str] = field(default_factory=list)
     positives: list[str] = field(default_factory=list)
+    is_module: bool = False
+    whole_model: bool = False
+    scaffolding: bool = False
+    stateless_tiny: bool = False
+    blocked_by_dependencies: bool = False
+    composes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -257,14 +263,16 @@ def forward_signature(node: ast.ClassDef) -> list[str] | None:
 def collect_import_info(tree: ast.Module) -> dict[str, tuple[str, int]]:
     """Map imported local name -> (module path, relative level)."""
     info: dict[str, tuple[str, int]] = {}
-    for node in tree.body:
+    # ast.walk also reaches `try: from causal_conv1d import ... except ImportError:` guards and
+    # `if TYPE_CHECKING:` blocks, which is where optional compiled-op dependencies usually hide.
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                info[(alias.asname or alias.name).split(".")[0]] = (alias.name, 0)
+                info.setdefault((alias.asname or alias.name).split(".")[0], (alias.name, 0))
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             for alias in node.names:
-                info[alias.asname or alias.name] = (module, node.level)
+                info.setdefault(alias.asname or alias.name, (module, node.level))
     return info
 
 
@@ -296,6 +304,10 @@ def score_class(
 ) -> Candidate | None:
     bases = [dotted_name(base) for base in node.bases if dotted_name(base)]
     reason = candidate_reason(node.name, bases, "class", local_module_classes)
+    if reason is None and forward_signature(node) is not None:
+        # Framework bases (mmengine BaseModule, custom Layer subclasses) and unremarkable names such as
+        # `FPN` or `Net` are still modules if they define forward()/call().
+        reason = "class defines forward()/call()"
     if reason is None:
         return None
 
@@ -332,11 +344,16 @@ def score_class(
         risks.append(f"large class ({n_lines} lines); may be a full model")
 
     # Scaffolding and whole-model signals.
-    if any(word in lowered for word in SCAFFOLD_NAME_KEYWORDS) or any(base.lower() in SCAFFOLD_BASES for base in bases):
+    scaffolding = any(word in lowered for word in SCAFFOLD_NAME_KEYWORDS) or any(
+        base.lower() in SCAFFOLD_BASES for base in bases
+    )
+    whole_model = False
+    if scaffolding:
         score -= 4
         risks.append("name/base suggests training, data, or config scaffolding")
     stripped = lowered.rstrip("0123456789_")
     if stripped.endswith(WHOLE_MODEL_SUFFIXES) and not any(word in lowered for word in ("block", "module", "layer", "attention", "unit")):
+        whole_model = True
         score -= 1
         risks.append("name suggests a complete model rather than a component")
 
@@ -385,6 +402,7 @@ def score_class(
             init_args = [arg.arg for arg in child.args.args if arg.arg != "self"]
     if any(arg in {"num_classes", "num_class", "n_classes", "nclass", "class_num"} for arg in init_args):
         risks.append("constructor takes a class count, which usually means a complete task model")
+        whole_model = True
         score -= 2
     if uses_config or any(arg in CONFIG_NAMES for arg in init_args):
         risks.append("constructor depends on a config/args object (replace with explicit arguments)")
@@ -393,8 +411,36 @@ def score_class(
         risks.append("hard-codes CUDA; make device-agnostic")
         score -= 1
 
+    # Tiny stateless helpers (Flatten, ChannelPool, h_sigmoid) are real modules but rarely worth exporting.
+    learnable_markers = ("Conv", "Linear", "Norm", "Embedding", "Parameter", "LSTM", "GRU", "MultiheadAttention", "Bilinear")
+    has_state = bool(local_constructed) or any(any(marker in name for marker in learnable_markers) for name in constructed)
+    forward_node = next((c for c in node.body if isinstance(c, ast.FunctionDef) and c.name in FORWARD_METHODS), None)
+    forward_stmts = len(forward_node.body) if forward_node else 0
+    stateless_tiny = bool(forward_node) and not has_state and forward_stmts <= 3 and n_lines <= 25
+    if stateless_tiny:
+        risks.append("tiny stateless helper (no learnable layers, <=3 statements); usually not worth exporting alone")
+        score -= 2
+
+    blocked = (
+        forward is not None
+        and not scaffolding
+        and not whole_model
+        and not stateless_tiny
+        and score < 4
+        and any(("package" in risk or "project-local" in risk or "registry" in risk or "CUDA" in risk or "config" in risk) for risk in risks)
+    )
+    if blocked:
+        risks.append("module-like (defines forward) but blocked by dependencies; extractable only after replacing them")
+
     score = max(0, min(10, score))
-    tier = "strong" if score >= 7 and is_module and forward is not None else "possible" if score >= 4 else "weak"
+    candidate_flags = dict(
+        is_module=is_module,
+        whole_model=whole_model,
+        scaffolding=scaffolding,
+        stateless_tiny=stateless_tiny,
+        blocked_by_dependencies=blocked,
+    )
+    tier = assign_tier(score, forward is not None, candidate_flags)
     return Candidate(
         path=relative,
         kind="class",
@@ -409,7 +455,19 @@ def score_class(
         n_submodules=n_submodules,
         risks=risks,
         positives=positives,
+        **candidate_flags,
     )
+
+
+def assign_tier(score: int, has_forward: bool, flags: dict) -> str:
+    """strong: self-contained module; possible: usable after inspection/dependency work; weak: probably not a unit."""
+    if flags["whole_model"] or flags["scaffolding"]:
+        return "weak"  # whole models and pipeline classes are listed as rejected, never as candidates
+    if score >= 7 and flags["is_module"] and has_forward:
+        return "strong"
+    if score >= 4 or flags["blocked_by_dependencies"] or flags["stateless_tiny"] and score >= 2:
+        return "possible"
+    return "weak"
 
 
 def has_hard_cuda(node: ast.AST) -> bool:
@@ -481,12 +539,54 @@ def score_function(
     )
 
 
+def boost_composite_roots(tree: ast.Module, candidates: list[Candidate]) -> None:
+    """A class that composes other candidates of the file and is not used by any of them is the file's main unit."""
+    classes = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+    names = {c.name for c in candidates if c.kind == "class"}
+    uses: dict[str, set[str]] = {
+        name: {ref for ref in referenced_names(classes[name]) if ref in names and ref != name}
+        for name in names
+        if name in classes
+    }
+    used_by_others = {ref for refs in uses.values() for ref in refs}
+    for candidate in candidates:
+        refs = uses.get(candidate.name)
+        if not refs:
+            continue
+        candidate.composes = sorted(refs)
+        if candidate.name not in used_by_others and candidate.tier != "weak":
+            candidate.plug_score = min(10, candidate.plug_score + 1)
+            candidate.positives.append(f"composes {', '.join(sorted(refs))} and is not used by them (main unit of the file)")
+            if candidate.tier == "possible" and candidate.plug_score >= 7 and candidate.is_module:
+                candidate.tier = "strong"
+
+
+def read_source(path: Path) -> str:
+    """Python source of a .py file, or the concatenated code cells of a notebook."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix.lower() != ".ipynb":
+        return text
+    try:
+        cells = json.loads(text).get("cells", [])
+    except json.JSONDecodeError:
+        return ""
+    chunks = []
+    for cell in cells:
+        if cell.get("cell_type") != "code":
+            continue
+        body = cell.get("source", "")
+        body = "".join(body) if isinstance(body, list) else body
+        # Drop IPython magics and shell escapes so the cell parses as Python.
+        chunks.append("\n".join(line for line in body.splitlines() if not line.lstrip().startswith(("%", "!"))))
+    return "\n\n".join(chunks)
+
+
 def scan_file(path: Path, root: Path) -> FileSummary:
     relative = path.relative_to(root).as_posix() if path != root else path.name
-    try:
-        source = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        source = path.read_text(encoding="utf-8", errors="replace")
+    source = read_source(path)
 
     try:
         tree = ast.parse(source, filename=str(path))
@@ -518,6 +618,17 @@ def scan_file(path: Path, root: Path) -> FileSummary:
         if candidate:
             candidates.append(candidate)
 
+    boost_composite_roots(tree, candidates)
+    whole_models = {c.name for c in candidates if c.kind == "class" and c.whole_model}
+    for candidate in candidates:
+        if candidate.kind != "function" or not whole_models:
+            continue
+        node = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == candidate.name), None)
+        if node is not None and referenced_names(node) & whole_models:
+            candidate.tier = "weak"
+            candidate.whole_model = True
+            candidate.risks.append("factory function for a complete model, not a component")
+
     return FileSummary(
         path=relative,
         imports=import_names(tree),
@@ -530,13 +641,25 @@ def iter_python_files(root: Path) -> Iterable[Path]:
     if root.is_file():
         yield root
         return
-    for path in root.rglob("*.py"):
-        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
-        yield path
+    for pattern in ("*.py", "*.ipynb"):
+        for path in root.rglob(pattern):
+            if any(part in SKIP_DIRS or part == ".ipynb_checkpoints" for part in path.relative_to(root).parts):
+                continue
+            yield path
 
 
 TIER_ORDER = {"strong": 0, "possible": 1, "weak": 2}
+
+
+def scan_coverage(summaries: list[FileSummary]) -> dict:
+    """How much of the code could actually be read. A verdict of 'none' is only meaningful with full coverage."""
+    parsed = [s for s in summaries if not s.parse_error]
+    return {
+        "files": len(summaries),
+        "parsed": len(parsed),
+        "parse_errors": [f"{s.path}: {s.parse_error}" for s in summaries if s.parse_error],
+        "notebooks": sum(1 for s in summaries if s.path.endswith(".ipynb")),
+    }
 
 
 def overall_verdict(summaries: list[FileSummary]) -> str:

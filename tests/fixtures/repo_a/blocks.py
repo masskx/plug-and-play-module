@@ -72,6 +72,15 @@ class TinyResNet(nn.Module):
         return self.head(x.mean(dim=(2, 3)))
 
 
+def tiny_conv_resnet(num_classes: int = 10):
+    return TinyResNet(num_classes)
+
+
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+
+
 if __name__ == "__main__":
     x = torch.randn(2, 16, 8, 8)
     print(ChannelSpatialBlock(16)(x).shape)
