@@ -434,6 +434,95 @@ def _display(workspace: Workspace, path: Path) -> str:
         return path.as_posix()
 
 
+# --------------------------------------------------------------------------------------
+# Generated smoke test (real repositories almost never ship one)
+# --------------------------------------------------------------------------------------
+
+DTYPE_SUFFIXES = {"float", "half", "long", "int", "bool"}
+
+
+def parse_init_kwargs(init: str | None) -> dict[str, object]:
+    """'dim=64,heads=(2,4),act="relu"' -> {'dim': 64, 'heads': (2, 4), 'act': 'relu'} (literals only)."""
+    if not init:
+        return {}
+    call = ast.parse(f"dict({init})", mode="eval").body
+    if not isinstance(call, ast.Call) or call.args:
+        raise ValueError("--init must be keyword arguments such as 'channels=64,reduction=16'")
+    return {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords if kw.arg}
+
+
+def parse_input_specs(spec: str) -> list[tuple[tuple[int, ...], str]]:
+    """'2,64,16,16;2,16:long' -> [((2, 64, 16, 16), 'float'), ((2, 16), 'long')]."""
+    specs: list[tuple[tuple[int, ...], str]] = []
+    for part in spec.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        dtype = "float"
+        if ":" in part:
+            part, dtype = part.rsplit(":", 1)
+            if dtype not in DTYPE_SUFFIXES:
+                raise ValueError(f"unknown dtype '{dtype}' in --smoke-input (use one of {sorted(DTYPE_SUFFIXES)})")
+        dims = tuple(int(dim) for dim in part.split(",") if dim.strip())
+        if not dims or any(dim <= 0 for dim in dims):
+            raise ValueError(f"bad shape '{part}' in --smoke-input")
+        specs.append((dims, dtype))
+    if not specs:
+        raise ValueError("--smoke-input is empty")
+    return specs
+
+
+def build_smoke_block(symbol: str, is_class: bool, init: str | None, spec: str) -> str:
+    kwargs = parse_init_kwargs(init)
+    inputs = parse_input_specs(spec)
+    kw_text = ", ".join(f"{key}={value!r}" for key, value in kwargs.items())
+    makers = []
+    for dims, dtype in inputs:
+        shape = ", ".join(str(dim) for dim in dims)
+        if dtype == "float":
+            makers.append(f"torch.randn({shape}, device=device, requires_grad=True)")
+        elif dtype == "half":
+            makers.append(f"torch.randn({shape}, device=device).half()")
+        elif dtype == "bool":
+            makers.append(f"torch.rand({shape}, device=device) > 0.5")
+        else:
+            makers.append(f"torch.randint(0, 8, ({shape},), device=device)")
+    lines = [
+        'if __name__ == "__main__":',
+        "    import torch",
+        "",
+        "    torch.manual_seed(0)",
+        '    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")',
+    ]
+    if is_class:
+        lines.append(f"    model = {symbol}({kw_text}).to(device)")
+        call = "model(*inputs)"
+    else:
+        call = f"{symbol}(*inputs{', ' + kw_text if kw_text else ''})"
+    lines.append("    inputs = [")
+    lines += [f"        {maker}," for maker in makers]
+    lines.append("    ]")
+    lines += [
+        f"    outputs = {call}",
+        "    outputs = [o for o in (outputs if isinstance(outputs, (tuple, list)) else (outputs,)) if torch.is_tensor(o)]",
+        '    print("input shapes :", [tuple(t.shape) for t in inputs])',
+        '    print("output shapes:", [tuple(o.shape) for o in outputs])',
+        "    differentiable = [o.float().mean() for o in outputs if o.requires_grad]",
+        "    if differentiable:",
+        "        sum(differentiable).backward()",
+    ]
+    if is_class:
+        lines += [
+            "        params = list(model.parameters())",
+            "        with_grad = sum(p.grad is not None for p in params)",
+            '        print(f"backward ok | parameters: {sum(p.numel() for p in params)} | with gradient: {with_grad}/{len(params)}")',
+        ]
+    else:
+        lines.append('        print("backward ok")')
+    lines += ["    else:", '        print("outputs are not differentiable; backward skipped")']
+    return "\n".join(lines)
+
+
 def parse_names(raw_names: list[str] | None) -> list[str]:
     if not raw_names:
         return []
@@ -454,6 +543,9 @@ def extract(
     resolve_local: bool = True,
     prune_imports: bool = False,
     basis: str = "source-code-derived",
+    smoke_input: str | None = None,
+    init: str | None = None,
+    force_smoke: bool = False,
 ) -> tuple[str, list[str]]:
     source_path = source_path.resolve()
     workspace = Workspace(root or source_path.parent)
@@ -473,7 +565,7 @@ def extract(
     )
     if not any(plan.selected.values()):
         raise ValueError("no nodes selected")
-    return render(
+    text, notes = render(
         workspace,
         plan,
         source_path,
@@ -484,6 +576,23 @@ def extract(
         resolve_local,
         basis,
     )
+    has_main = any(is_main_guard(node) for node in ast.parse(text).body)
+    if smoke_input and (force_smoke or not has_main):
+        if has_main:  # replace the source's own smoke test
+            tree = ast.parse(text)
+            guard = next(node for node in tree.body if is_main_guard(node))
+            lines = text.splitlines()
+            text = "\n".join(lines[: guard.lineno - 1]).rstrip() + "\n"
+        target = names[0]
+        is_class = isinstance(top_level_node_map(main.tree).get(target), ast.ClassDef)
+        text = text.rstrip() + "\n\n\n" + build_smoke_block(target, is_class, init, smoke_input) + "\n"
+        notes.append(f"generated smoke test for `{target}` from --smoke-input/--init (check the shapes are valid for the module)")
+    elif not has_main:
+        notes.append(
+            "the export has no __main__ smoke test (the source has none): rerun with --smoke-input \"B,C,H,W\" "
+            "[--init \"arg=value,...\"] to generate one"
+        )
+    return text, notes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -519,6 +628,19 @@ def main(argv: list[str] | None = None) -> int:
         "--prune-imports",
         action="store_true",
         help="Drop imports from the source file that the extracted code never references.",
+    )
+    parser.add_argument(
+        "--smoke-input",
+        help=(
+            "Generate a CPU-safe __main__ smoke test (shapes, backward, parameter gradients). Input shapes, "
+            "semicolon-separated, optional dtype suffix: \"2,64,16,16\" or \"2,16:long;2,16:bool\"."
+        ),
+    )
+    parser.add_argument("--init", help="Constructor keyword arguments for the smoke test, e.g. \"channels=64,reduction=16\".")
+    parser.add_argument(
+        "--force-smoke",
+        action="store_true",
+        help="Replace the source file's own __main__ block with the generated smoke test.",
     )
     parser.add_argument(
         "--basis",
@@ -557,10 +679,13 @@ def main(argv: list[str] | None = None) -> int:
             resolve_local=not args.no_resolve_local,
             prune_imports=args.prune_imports,
             basis=args.basis,
+            smoke_input=args.smoke_input,
+            init=args.init,
+            force_smoke=args.force_smoke,
         )
     except KeyError as exc:
         parser.error(str(exc.args[0]))
-    except ValueError as exc:
+    except (ValueError, SyntaxError) as exc:
         parser.error(str(exc))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

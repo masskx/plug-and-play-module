@@ -22,7 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from analyze_paper_modules import analyze, strip_extractor_metadata  # noqa: E402
-from find_module_candidates import iter_python_files, ranked, scan_file  # noqa: E402
+from find_module_candidates import iter_python_files, ranked, scan_coverage, scan_file  # noqa: E402
 from match_paper_to_code import alignment_label, match  # noqa: E402
 
 NO_MODULE_EN = "After review, no usable plug-and-play modules were found in {subject}."
@@ -199,10 +199,12 @@ def run_gate(
     code_verdict = "none"
     code_candidates = []
     if has_code:
-        _, code_candidates = scan_code(code_root)
+        summaries, code_candidates = scan_code(code_root)
+        coverage = scan_coverage(summaries)
         tiers = {c.tier for c in code_candidates}
         code_verdict = "strong" if "strong" in tiers else "possible" if "possible" in tiers else "none"
         code_info = {
+            "coverage": coverage,
             "verdict": code_verdict,
             "top": [target_dict(c) for c in code_candidates[:8]],
         }
@@ -243,6 +245,20 @@ def run_gate(
                 gate.targets.append(target_dict(by_key[(m.code_path, m.code_symbol)], m.score))
         if not gate.targets:
             gate.targets = [target_dict(c) for c in code_candidates if c.tier == "strong"][:4]
+
+    # A "no" that rests on code we could not read is not a "no".
+    if gate.found_module == "no" and code_info:
+        cov = code_info["coverage"]
+        if cov["files"] == 0:
+            gate.found_module = "uncertain"
+            gate.reasons = ["no Python files or notebooks were found under the given code path; check the path or language"]
+        elif cov["parse_errors"]:
+            gate.found_module = "uncertain"
+            gate.reasons = [
+                f"{len(cov['parse_errors'])} of {cov['files']} source files could not be parsed (e.g. Python 2 syntax): "
+                + "; ".join(cov["parse_errors"][:3])
+                + " - read those files manually before concluding there is no module"
+            ] + gate.reasons
 
     # Next steps and report.
     if gate.found_module == "no":

@@ -35,7 +35,8 @@ Read `references/input_modes.md` for the full protocol of each situation, includ
 
 3. **Review gate (mandatory, before any code).** Run
    `scripts/review_gate.py --paper-text paper.txt --code-root <repo> [--lang en|zh] --json` (either flag may be omitted). It combines `analyze_paper_modules.py`, `find_module_candidates.py`, and `match_paper_to_code.py` into `found_module: yes | no | uncertain`. Then **verify it yourself** with `references/module_detection.md`: read the method section and the candidate source, and for every candidate write down input, output, and operations. The script is evidence, not the decision.
-   - Look at *every* candidate: a paper or repo may contain several independent modules.
+   - Look at *every* candidate: a paper or repo may contain several independent modules. Candidates with `tier=possible` and a "blocked by dependencies" risk (framework base classes, registries, compiled ops) are real modules that need work, not absent ones.
+   - A "no" is only valid when the code was fully readable. The gate downgrades to `uncertain` when the path has no Python files or some files do not parse (e.g. Python 2); read those manually. Notebooks are scanned, but export their cells by hand.
    - Apply the usability criteria (bounded I/O, fully specified, independent of the pipeline, not a trivial standard layer, runnable on CPU). Drop candidates that fail and note why.
 
 4. **If no candidate survives -> stop.** Output only the standard result (use the user's language) and create no code or files:
@@ -46,7 +47,7 @@ Read `references/input_modes.md` for the full protocol of each situation, includ
    Follow it with at most 3-4 evidence bullets and the rejected candidates with reasons (`review_gate.py` prints this report). Do not pad it with suggestions or partial code.
 
 5. **Export the module(s).**
-   - `pdf-plus-code` / `code-only`: `scripts/extract_python_module.py <source.py> --name <Symbol> --include-main --root <repo-root> --prune-imports --output <module.py>`. It follows same-file dependencies, inlines helpers imported from other files of the repo, strips framework registry decorators, and prints `note: unresolved ...` for anything it could not resolve - fix those by hand (replace config objects with explicit arguments, vendor or replace custom ops) and keep the numerical behavior identical. Use `--include-all-helpers` only if the boundary is uncertain.
+   - `pdf-plus-code` / `code-only`: `scripts/extract_python_module.py <source.py> --name <Symbol> --include-main --root <repo-root> --prune-imports --output <module.py>`. Real repositories almost never contain a `__main__` smoke test, so add `--smoke-input "B,C,H,W" --init "arg=value,..."` (use `;` between several inputs, `:long`/`:bool` for dtypes; `--force-smoke` replaces an existing block) to generate a CPU-safe one that checks shapes, backward, and parameter gradients - read the constructor to choose valid arguments. It follows same-file dependencies, inlines helpers imported from other files of the repo, strips framework registry decorators, and prints `note: unresolved ...` for anything it could not resolve - fix those by hand (replace config objects with explicit arguments, vendor or replace custom ops) and keep the numerical behavior identical. Use `--include-all-helpers` only if the boundary is uncertain.
    - `pdf-only` (or code lacks the paper's module): `scripts/build_reconstruction_brief.py paper.txt --output brief.md`, follow `references/paper_reconstruction.md`, and label the result `paper-derived` with an assumption ledger.
    - Several independent modules -> one file each (plus a one-line index in the report). Tightly coupled units that only work together -> one file.
 
@@ -57,6 +58,10 @@ Read `references/input_modes.md` for the full protocol of each situation, includ
    - Missing optional dependencies (torch, mamba_ssm, ...) are an environment issue, not proof of failure; report them.
 
 7. **Report** in the format of `references/output_contract.md` (module path, basis, dependencies, run command, smoke-test result, shapes, caveats).
+
+## Real-world validation
+
+`scripts/run_real_world_benchmark.py tests/real_world/manifest.json --workdir <dir> --python <python-with-torch>` evaluates the skill on real arXiv papers and real GitHub repositories (paper verdict, code verdict, export, contract, execution, and output equivalence against the original module). Steps whose data cannot be fetched are reported as SKIP. See `tests/real_world/README.md` for what has and has not been verified.
 
 ## Regression loop
 
@@ -111,4 +116,5 @@ When changing a heuristic, add a fixture to `tests/fixtures` that captures the f
 - `scripts/check_module_contract.py`: standalone / device / network / undefined-name checks, optional run.
 - `scripts/smoke_test_module.py`: compile, import, and run with classified failures.
 - `scripts/compare_module_interface.py`: source-vs-export interface comparison and `--fidelity` check.
+- `scripts/run_real_world_benchmark.py`: real papers + real repositories benchmark driven by a manifest.
 - `scripts/evaluate_sample_cases.py`, `scripts/evaluate_generated_module.py`, `scripts/evaluate_generated_batch.py`, `scripts/run_regression_suite.py`: regression tooling.

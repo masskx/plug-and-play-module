@@ -122,10 +122,47 @@ class CodeScanTests(unittest.TestCase):
 
     def test_coupled_module_reports_why_it_is_not_standalone(self) -> None:
         coupled = self.by_name["CoupledBlock"]
-        self.assertEqual(coupled.tier, "weak")
+        # Blocked only by dependencies: surfaced as "possible" (never silently dropped) with the blockers listed.
+        self.assertEqual(coupled.tier, "possible")
+        self.assertTrue(coupled.blocked_by_dependencies)
         joined = " ".join(coupled.risks)
         for needle in ("mmcv", "project-local", "registry", "config"):
             self.assertIn(needle, joined)
+
+    def test_framework_base_and_plain_name_are_still_candidates(self) -> None:
+        # Regression: mmdetection's FPN has a framework base class and no keyword in its name, and was
+        # previously invisible, which turned a real module into a false "no usable module".
+        summaries = [finder.scan_file(p, FIXTURES / "repo_framework") for p in finder.iter_python_files(FIXTURES / "repo_framework")]
+        fpn = {c.name: c for s in summaries for c in s.candidates}["FPN"]
+        self.assertEqual(fpn.tier, "possible")
+        self.assertTrue(fpn.blocked_by_dependencies)
+        self.assertEqual(review_gate.run_gate(None, FIXTURES / "repo_framework", None).found_module, "uncertain")
+
+    def test_model_factories_and_tiny_helpers_are_not_strong(self) -> None:
+        self.assertEqual(self.by_name["tiny_conv_resnet"].tier, "weak")
+        self.assertNotEqual(self.by_name["Flatten"].tier, "strong")
+        self.assertTrue(self.by_name["Flatten"].stateless_tiny)
+
+    def test_composite_root_is_marked(self) -> None:
+        self.assertEqual(self.by_name["ChannelSpatialBlock"].composes, ["ChannelGate", "SpatialAttention"])
+
+    def test_optional_imports_inside_try_blocks_are_seen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "m.py"
+            path.write_text(
+                "import torch.nn as nn\ntry:\n    from causal_conv1d import causal_conv1d_fn\nexcept ImportError:\n    causal_conv1d_fn = None\n\n\n"
+                "class Mixer(nn.Module):\n    def forward(self, x):\n        return causal_conv1d_fn(x)\n",
+                encoding="utf-8",
+            )
+            mixer = {c.name: c for c in finder.scan_file(path, Path(tmp)).candidates}["Mixer"]
+        self.assertTrue(any("causal_conv1d" in risk for risk in mixer.risks))
+
+    def test_notebook_cells_are_scanned(self) -> None:
+        cell = "%matplotlib inline\nimport torch.nn as nn\n\nclass NbGate(nn.Module):\n    def forward(self, x):\n        return x * 2\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "demo.ipynb").write_text(json.dumps({"cells": [{"cell_type": "code", "source": cell.splitlines(True)}]}), encoding="utf-8")
+            names = {c.name for s in [finder.scan_file(p, Path(tmp)) for p in finder.iter_python_files(Path(tmp))] for c in s.candidates}
+        self.assertIn("NbGate", names)
 
     def test_repo_without_modules_has_no_candidates(self) -> None:
         summaries = [finder.scan_file(p, FIXTURES / "repo_none") for p in finder.iter_python_files(FIXTURES / "repo_none")]
@@ -289,6 +326,31 @@ class ExtractionTests(unittest.TestCase):
         # Inlined project-local imports are not reported as lost.
         self.assertEqual(compare.compare(root / "pkg" / "blocks.py", exported).missing_imports, [])
 
+    @unittest.skipUnless(HAS_TORCH, "PyTorch not installed")
+    def test_generated_smoke_test_runs_for_class_and_function(self) -> None:
+        # Real repositories rarely ship a __main__ block; the extractor can generate one.
+        cases = [
+            ("ChannelGate", "channels=16", "2,16,8,8", "output shapes: [(2, 16, 8, 8)]"),
+            ("focal_loss", None, "4,10;4:long", "backward ok"),
+        ]
+        for symbol, init, shape, expected in cases:
+            with self.subTest(symbol=symbol), tempfile.TemporaryDirectory() as tmp:
+                text, notes = self.extract(
+                    FIXTURES / "repo_a" / "blocks.py", FIXTURES / "repo_a", symbol, smoke_input=shape, init=init, force_smoke=True
+                )
+                path = Path(tmp) / "m.py"
+                path.write_text(text, encoding="utf-8")
+                proc = subprocess.run([sys.executable, str(path)], text=True, capture_output=True, cwd=tmp)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertIn(expected, proc.stdout)
+                self.assertEqual(contract.check(path).status, "passed")
+
+    def test_missing_smoke_test_is_called_out(self) -> None:
+        text, notes = self.extract(FIXTURES / "repo_a" / "blocks.py", FIXTURES / "repo_a", "ChannelGate")
+        self.assertTrue(any("--smoke-input" in note for note in notes))
+        with self.assertRaises(ValueError):
+            extractor.parse_input_specs("2,16:notadtype")
+
     def test_missing_symbol_raises(self) -> None:
         with self.assertRaises(KeyError):
             self.extract(FIXTURES / "repo_a" / "blocks.py", FIXTURES / "repo_a", "DoesNotExist")
@@ -432,6 +494,16 @@ class ReviewGateTests(unittest.TestCase):
         gate = self.gate("dataset_only", "repo_a")
         self.assertEqual(gate.found_module, "uncertain")
 
+    def test_unreadable_or_empty_code_never_proves_absence(self) -> None:
+        # Regression: an empty/wrong path or Python 2 code used to yield "no usable plug-and-play modules".
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = review_gate.run_gate(None, Path(tmp), None)
+        self.assertEqual(empty.found_module, "uncertain")
+        self.assertEqual(empty.report, "")
+        legacy = self.gate(repo="repo_py2")
+        self.assertEqual(legacy.found_module, "uncertain")
+        self.assertIn("could not be parsed", legacy.reasons[0])
+
     def test_code_only(self) -> None:
         gate = self.gate(repo="repo_a")
         self.assertEqual((gate.source_mode, gate.found_module, gate.implementation_basis), ("code-only", "yes", "source-code-derived"))
@@ -470,6 +542,35 @@ class EndToEndTests(unittest.TestCase):
             proc = run_script("check_module_contract.py", str(out), "--run", "--python", sys.executable)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("smoke_test: passed", proc.stdout)
+
+
+class RealWorldManifestTests(unittest.TestCase):
+    def test_manifest_is_well_formed(self) -> None:
+        entries = json.loads((ROOT / "tests" / "real_world" / "manifest.json").read_text(encoding="utf-8"))["entries"]
+        ids = [entry["id"] for entry in entries]
+        self.assertEqual(len(ids), len(set(ids)))
+        for entry in entries:
+            with self.subTest(entry=entry["id"]):
+                self.assertTrue(entry.get("code") or entry.get("arxiv_id"))
+                for target in entry.get("targets", []):
+                    self.assertIn(target["file"], entry["code"]["files"])
+                    extractor.parse_input_specs(target["smoke_input"])
+                    extractor.parse_init_kwargs(target.get("init"))
+                for verdict in entry.get("expected_paper") or []:
+                    self.assertIn(verdict, {"yes", "no", "uncertain"})
+
+    def test_runner_skips_instead_of_failing_without_data(self) -> None:
+        import run_real_world_benchmark as bench
+
+        entry = {"id": "x", "title": "t", "arxiv_id": None, "expected_paper": ["yes"], "code": {"repo": "o/r", "branch": "b", "files": ["f.py"]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            original = bench.http_download
+            bench.http_download = lambda *a, **k: False  # simulate a blocked network
+            try:
+                result = bench.evaluate_entry(entry, Path(tmp), None, sys.executable, True)
+            finally:
+                bench.http_download = original
+        self.assertTrue(all(step.status == "SKIP" for step in result.steps.values()), result.steps)
 
 
 class ScriptHygieneTests(unittest.TestCase):
