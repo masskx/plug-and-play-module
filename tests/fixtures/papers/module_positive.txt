@@ -1,0 +1,28 @@
+# Extracted PDF Text
+
+source: fixture
+backend: fixture
+pages: 2
+
+## Page 1
+Ripple Attention: A Lightweight Plug-and-Play Channel Attention Block
+Jane Doe, John Roe
+Example University, Department of Computer Science
+Abstract
+Channel attention improves convolutional networks, but existing designs are costly. We propose Ripple Attention (RA), a lightweight
+plug-and-play module that recalibrates feature maps with a pooled descriptor. RA can be easily inserted into any convolutional
+backbone without changing the surrounding layers. Experiments on classification and detection show consistent gains.
+1 Introduction
+Convolutional backbones benefit from re-weighting channels. In this paper we introduce the Ripple Attention module, which
+costs fewer parameters than prior blocks and can be integrated into existing networks.
+## Page 2
+3 Method
+Given an input feature map X of size B x C x H x W, the Ripple Attention block first applies global average pooling to obtain a
+descriptor z of shape B x C x 1 x 1. The descriptor is passed through a one-dimensional convolution with kernel size k.
+z = GAP(X)                                                        (1)
+w = sigmoid(Conv1D(z))                                            (2)
+Y = X * w + X                                                     (3)
+Figure 2 illustrates the structure of the proposed Ripple Attention module. The output Y has the same shape as the input X, so the
+block is a drop-in replacement for identity connections. Algorithm 1 gives the pseudo-code.
+4 Ablation
+We ablate the Ripple Attention module by removing the residual connection and by varying the kernel size k.

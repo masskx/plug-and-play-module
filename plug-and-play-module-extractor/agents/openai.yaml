@@ -1,4 +1,4 @@
 interface:
   display_name: "Plug-and-Play Module Extractor"
-  short_description: "Extract runnable plug-and-play modules from papers and code."
-  default_prompt: "Use $plug-and-play-module-extractor to analyze a paper PDF or code repository and extract a runnable plug-and-play module."
+  short_description: "Find, extract, or reconstruct plug-and-play modules from a paper, code, or just a title - or report that none are usable."
+  default_prompt: "Use $plug-and-play-module-extractor to review this paper PDF, code repository, or paper title, and export any usable plug-and-play module as standalone runnable code. If, after review, there is no usable module, say so and produce no code."

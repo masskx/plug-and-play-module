@@ -1,0 +1,14 @@
+# Extracted PDF Text
+
+source: fixture
+backend: fixture
+pages: 1
+
+## Page 1
+FleetOps: An End-to-End System for Warehouse Robot Deployment
+Frank Builder, Gina Ops
+Robotics Institute, Example University
+Abstract
+We present FleetOps, an end-to-end system and open-source platform for deploying robot fleets in warehouses. The system integrates
+perception, planning and scheduling services behind a common API. We describe the deployment pipeline, the monitoring dashboard
+and lessons learned from a six-month pilot.

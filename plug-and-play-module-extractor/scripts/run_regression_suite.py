@@ -101,7 +101,12 @@ def main(argv: list[str] | None = None) -> int:
     ensure_utf8_stdio()
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("samples_root", type=Path, help="Directory containing numbered sample folders.")
+    parser.add_argument(
+        "samples_root",
+        type=Path,
+        nargs="?",
+        help="Directory containing numbered sample folders (private; optional). Without it only the built-in tests run.",
+    )
     parser.add_argument("--python", default=sys.executable, help="Python executable used for module smoke tests.")
     parser.add_argument("--timeout", type=int, default=90, help="Timeout for subprocess steps.")
     parser.add_argument("--validator", type=Path, help="Optional path to skill-creator quick_validate.py.")
@@ -109,14 +114,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-json", type=Path, help="Write a JSON report for this regression run.")
     args = parser.parse_args(argv)
 
-    samples_root = args.samples_root.resolve()
-    if not samples_root.exists():
+    samples_root = args.samples_root.resolve() if args.samples_root else None
+    if samples_root is not None and not samples_root.exists():
         parser.error(f"samples root not found: {samples_root}")
 
     failures: list[str] = []
     report: dict[str, object] = {
         "skill_root": str(SKILL_ROOT),
-        "samples_root": str(samples_root),
+        "samples_root": str(samples_root) if samples_root else None,
         "python": args.python,
         "stages": {},
         "failures": failures,
@@ -143,6 +148,27 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("quick_validate: skipped")
         report["stages"]["quick_validate"] = {"status": "skipped"}
+
+    tests_dir = SKILL_ROOT.parent / "tests"
+    if tests_dir.is_dir():
+        code, output = run_command(
+            [sys.executable, "-m", "unittest", "discover", "-s", str(tests_dir)],
+            max(args.timeout * 10, 600),
+        )
+        print(output.splitlines()[-1] if output else "unit_tests: no output")
+        if code != 0:
+            failures.append(f"unit tests failed:\n{output[-3000:]}")
+        report["stages"]["unit_tests"] = {"status": summarize_status(code), "output": output[-3000:]}
+    else:
+        print("unit_tests: skipped (tests/ not found)")
+        report["stages"]["unit_tests"] = {"status": "skipped"}
+
+    if samples_root is None:
+        print("sample_regression: skipped (no samples root given)")
+        report["stages"]["evaluate_sample_cases"] = {"status": "skipped"}
+        report["stages"]["simulated_generated_batch"] = {"status": "skipped"}
+        report["stages"]["evaluate_generated_batch"] = {"status": "skipped"}
+        return finish(report, failures, args.report_json)
 
     code, output = run_command(
         [
@@ -205,22 +231,21 @@ def main(argv: list[str] | None = None) -> int:
         report["stages"]["simulated_generated_batch"] = {"status": "skipped"}
         report["stages"]["evaluate_generated_batch"] = {"status": "skipped"}
 
+    return finish(report, failures, args.report_json)
+
+
+def finish(report: dict[str, object], failures: list[str], report_json: Path | None) -> int:
+    report["status"] = "failed" if failures else "passed"
     if failures:
         print("regression_suite: failed")
         for failure in failures:
             print(f"- {failure}")
-        report["status"] = "failed"
-        if args.report_json:
-            args.report_json.parent.mkdir(parents=True, exist_ok=True)
-            args.report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        return 1
-
-    print("regression_suite: passed")
-    report["status"] = "passed"
-    if args.report_json:
-        args.report_json.parent.mkdir(parents=True, exist_ok=True)
-        args.report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    return 0
+    else:
+        print("regression_suite: passed")
+    if report_json:
+        report_json.parent.mkdir(parents=True, exist_ok=True)
+        report_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+# Extracted PDF Text
+
+source: fixture
+backend: fixture
+pages: 1
+
+## Page 1
+UrbanScenes-10K: A Large-Scale Dataset for Street-Level Semantic Understanding
+Alice Example, Bob Sample
+Institute of Vision, Example University
+Abstract
+We introduce UrbanScenes-10K, a new large-scale dataset of ten thousand annotated street images collected across twelve cities. We
+release the annotation protocol and a benchmark with a public leaderboard. We evaluate several existing models on the benchmark
+and report results. The dataset, annotation guidelines and evaluation protocol are publicly available.
+1 Introduction
+Street-level understanding lacks diverse data. Our annotation challenge covers lighting changes and weather. Table 1 compares the
+dataset with prior benchmark collections. Models from the literature are trained with their default settings and the layer
+configurations are taken from the original papers.

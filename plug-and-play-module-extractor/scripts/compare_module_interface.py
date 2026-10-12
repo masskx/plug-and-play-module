@@ -104,7 +104,11 @@ def missing(reference: list[str], candidate: list[str]) -> list[str]:
 def compare(reference_path: Path, candidate_path: Path) -> InterfaceComparison:
     reference = module_interface(reference_path)
     candidate = module_interface(candidate_path)
-    missing_imports = missing(reference.imports, candidate.imports)
+    defined = set(candidate.classes) | set(candidate.functions) | set(candidate.constants)
+    # An import that was replaced by an inlined definition (project-local helper) is not a loss.
+    missing_imports = [
+        item for item in missing(reference.imports, candidate.imports) if item.rsplit(".", 1)[-1] not in defined
+    ]
     missing_classes = missing(reference.classes, candidate.classes)
     missing_functions = missing(reference.functions, candidate.functions)
     missing_constants = missing(reference.constants, candidate.constants)
@@ -130,6 +134,29 @@ def compare(reference_path: Path, candidate_path: Path) -> InterfaceComparison:
     )
 
 
+def definition_dumps(path: Path) -> dict[str, str]:
+    """Top-level class/function -> AST dump without decorators, so edits are detectable but formatting is not."""
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    dumps: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            clone = ast.parse(ast.unparse(node)).body[0]
+            clone.decorator_list = []  # type: ignore[attr-defined]
+            dumps[node.name] = ast.dump(clone)
+    return dumps
+
+
+def fidelity(reference_path: Path, candidate_path: Path) -> dict[str, list[str]]:
+    """Check that an extraction is code-faithful: every symbol it shares with the source is unchanged."""
+    reference = definition_dumps(reference_path)
+    candidate = definition_dumps(candidate_path)
+    return {
+        "identical": sorted(name for name in candidate if reference.get(name) == candidate[name]),
+        "modified": sorted(name for name in candidate if name in reference and reference[name] != candidate[name]),
+        "added": sorted(name for name in candidate if name not in reference),
+    }
+
+
 def render_text(result: InterfaceComparison) -> str:
     lines = [
         f"status: {result.status}",
@@ -151,12 +178,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("reference", type=Path, help="Reference Python module.")
     parser.add_argument("candidate", type=Path, help="Extracted/generated Python module.")
     parser.add_argument("--json", action="store_true", help="Emit JSON.")
+    parser.add_argument(
+        "--fidelity",
+        action="store_true",
+        help="Subset-friendly check: shared classes/functions must be unchanged (use when only some symbols were extracted).",
+    )
     args = parser.parse_args(argv)
 
     if not args.reference.exists():
         parser.error(f"reference not found: {args.reference}")
     if not args.candidate.exists():
         parser.error(f"candidate not found: {args.candidate}")
+
+    if args.fidelity:
+        report = fidelity(args.reference.resolve(), args.candidate.resolve())
+        status = "failed" if report["modified"] else "passed"
+        if args.json:
+            print(json.dumps({"status": status, **report}, ensure_ascii=False, indent=2))
+        else:
+            print(f"status: {status}")
+            for key in ("identical", "modified", "added"):
+                print(f"{key}: {', '.join(report[key]) if report[key] else 'none'}")
+        return 0 if status == "passed" else 1
 
     result = compare(args.reference.resolve(), args.candidate.resolve())
     if args.json:

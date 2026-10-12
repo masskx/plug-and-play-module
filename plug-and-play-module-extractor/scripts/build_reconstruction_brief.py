@@ -113,13 +113,36 @@ def render_markdown(text_path: Path, max_candidates: int = 8) -> str:
     if not section_hints:
         section_hints.append("No method-section hints found in extracted text.")
 
+    structural = analysis.structural
+    structural_lines = ["- none"]
+    if structural:
+        structural_lines = [
+            f"- contribution_type: {analysis.contribution_type}",
+            f"- structural_score: {structural.score}",
+            f"- plug-in claims: {len(structural.plug_claims)}"
+            + (f" (e.g. {structural.plug_claims[0][:160]})" if structural.plug_claims else ""),
+            f"- equation-like lines: {structural.equation_lines}; shape mentions: {structural.shape_mentions}; "
+            f"algorithm references: {structural.algorithm_mentions}; figure-module references: {structural.figure_module_mentions}",
+            f"- module ablation present: {'yes' if structural.module_ablation else 'no'}",
+            f"- operations mentioned: {', '.join(structural.operation_terms) or 'none'}",
+        ]
+    banner = []
+    if analysis.found_module == "no":
+        banner = [
+            "> STOP: the automatic review found no separable module "
+            f"({'; '.join(analysis.reasons or [])}). Confirm by reading the method section; if confirmed, output the "
+            "standard no-usable-module result and write no code."
+        ]
     return "\n\n".join(
         [
             "# Paper-Only Reconstruction Brief",
+            *banner,
             f"source_text: `{text_path}`",
             f"found_module: `{analysis.found_module}`",
             f"title: {analysis.title or 'unknown'}",
             f"score: {analysis.score}",
+            "## Structural Evidence",
+            "\n".join(structural_lines),
             "## Candidate Modules",
             "\n".join(candidate_lines),
             "## Evidence Sentences",
@@ -140,6 +163,30 @@ def render_markdown(text_path: Path, max_candidates: int = 8) -> str:
                     "- expected_outputs: preserve module-level transformation shape when possible.",
                     "- unresolved_assumptions: list missing equation, hyperparameter, or tensor-shape details.",
                     "- smoke_test: create CPU random tensors and print input/output shapes.",
+                ]
+            ),
+            "## Module Card (fill before coding)",
+            "\n".join(
+                [
+                    "```text",
+                    "name / aliases:",
+                    "source (section / figure / equation):",
+                    "input (layout):",
+                    "output (layout):",
+                    "operations (ordered):",
+                    "hyperparameters / defaults:",
+                    "dependencies: torch only | extra pip | compiled op",
+                    "usability criteria 1-6: pass / fail",
+                    "decision: export | reject (reason) | uncertain (missing what)",
+                    "```",
+                ]
+            ),
+            "## Assumption Ledger (fill before coding)",
+            "\n".join(
+                [
+                    "```text",
+                    "operation / detail | source (Eq./Fig./Sec.) | fidelity rung 1-5 | assumption or choice",
+                    "```",
                 ]
             ),
             "## Section Hints",
